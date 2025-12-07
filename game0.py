@@ -32,6 +32,14 @@ BLUE = (0, 0, 255)
 YELLOW = (255, 255, 0)
 GRAY = (128, 128, 128)
 
+# Load assets
+player_image_orig = pygame.image.load('craft0.png').convert_alpha()
+player_image = pygame.transform.scale(player_image_orig, (30, 30))
+
+
+# Game constants
+RESTART_DELAY = 3000 # 3 seconds
+
 # Define variables that will be reset
 score = 0
 player_pos = [0,0]
@@ -46,9 +54,11 @@ items = []
 bg_offset_x = 0.0
 bg_offset_y = 0.0
 low_tier_enemy_destroyed = False
+last_shot_time = 0
+game_over_time = None
 
 def reset_game():
-    global player_pos, player_angle, thrust, weapon_level, game_state, bg_offset_x, bg_offset_y, score, low_tier_enemy_destroyed
+    global player_pos, player_angle, thrust, weapon_level, game_state, bg_offset_x, bg_offset_y, score, low_tier_enemy_destroyed, last_shot_time, game_over_time
     
     score = 0
     player_pos = [WIDTH / 2.0, HEIGHT / 2.0]
@@ -58,6 +68,8 @@ def reset_game():
     bg_offset_x = 0.0
     bg_offset_y = 0.0
     low_tier_enemy_destroyed = False
+    last_shot_time = 0
+    game_over_time = None
     
     bullets.clear()
     enemies.clear()
@@ -72,6 +84,7 @@ rotation_speed = 4.5
 max_thrust = 4.0
 thrust_accel = 0.2
 bullet_speed = 7
+shoot_delay = 150 # milliseconds
 
 # Enemies stats
 enemy_spawn_rate = 50
@@ -92,7 +105,7 @@ dust = [[random.randint(0, WIDTH), random.randint(0, HEIGHT), random.choice([GRA
 def draw_pixel_art(surface, pos, color, size=1):
     pygame.draw.rect(surface, color, (pos[0], pos[1], size, size))
 
-def draw_triangle_ship(surface, pos, angle, color):
+def draw_enemy_ship(surface, pos, angle, color):
     ship_points = [(10, 0), (-5, -7), (-5, 7)]
     rad = math.radians(angle)
     rotated_points = []
@@ -103,11 +116,14 @@ def draw_triangle_ship(surface, pos, angle, color):
     pygame.draw.polygon(surface, color, rotated_points)
 
 def draw_spaceship(surface, pos, angle):
-    draw_triangle_ship(surface, pos, angle, GREEN)
+    # Assumes player_image points UP by default. Pygame rotates counter-clockwise.
+    rotated_image = pygame.transform.rotate(player_image, -angle - 90)
+    new_rect = rotated_image.get_rect(center=pos)
+    surface.blit(rotated_image, new_rect)
 
 def draw_enemy(surface, pos, angle, tier):
     color = [RED, YELLOW, BLUE, GREEN, WHITE, GRAY][tier-1]
-    draw_triangle_ship(surface, pos, angle, color)
+    draw_enemy_ship(surface, pos, angle, color)
 
 def draw_asteroid(surface, pos, size):
     pygame.draw.circle(surface, GRAY, (int(pos[0]), int(pos[1])), size)
@@ -124,29 +140,11 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
-        
-        if game_state == STATE_PLAYING:
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                rad = math.radians(player_angle)
-                vel_x = math.cos(rad) * bullet_speed
-                vel_y = math.sin(rad) * bullet_speed
-                if weapon_level == 1:
-                    bullets.append([player_pos[0], player_pos[1], vel_x, vel_y])
-                elif weapon_level == 2:
-                    p_rad = math.radians(player_angle + 90)
-                    offset_x, offset_y = math.cos(p_rad) * 5, math.sin(p_rad) * 5
-                    bullets.append([player_pos[0] + offset_x, player_pos[1] + offset_y, vel_x, vel_y])
-                    bullets.append([player_pos[0] - offset_x, player_pos[1] - offset_y, vel_x, vel_y])
-                elif weapon_level == 3:
-                    bullets.append([player_pos[0], player_pos[1], vel_x, vel_y])
-                    for angle_diff in [-20, 20]:
-                        s_rad = math.radians(player_angle + angle_diff)
-                        s_vel_x, s_vel_y = math.cos(s_rad) * bullet_speed, math.sin(s_rad) * bullet_speed
-                        bullets.append([player_pos[0], player_pos[1], s_vel_x, s_vel_y])
-        
-        elif game_state == STATE_GAME_OVER:
-            if event.type == pygame.KEYDOWN:
-                reset_game()
+
+    # --- Auto-restart Logic ---
+    if game_state == STATE_GAME_OVER and game_over_time is not None:
+        if pygame.time.get_ticks() - game_over_time > RESTART_DELAY:
+            reset_game()
 
     # --- Game Logic ---
     if game_state == STATE_PLAYING:
@@ -169,6 +167,27 @@ while running:
         if player_pos[0] < 0: player_pos[0] = WIDTH
         if player_pos[1] > HEIGHT: player_pos[1] = 0
         if player_pos[1] < 0: player_pos[1] = HEIGHT
+
+        # Auto-fire
+        current_time = pygame.time.get_ticks()
+        if current_time - last_shot_time > shoot_delay:
+            last_shot_time = current_time
+            rad = math.radians(player_angle)
+            vel_x = math.cos(rad) * bullet_speed
+            vel_y = math.sin(rad) * bullet_speed
+            if weapon_level == 1:
+                bullets.append([player_pos[0], player_pos[1], vel_x, vel_y])
+            elif weapon_level == 2:
+                p_rad = math.radians(player_angle + 90)
+                offset_x, offset_y = math.cos(p_rad) * 5, math.sin(p_rad) * 5
+                bullets.append([player_pos[0] + offset_x, player_pos[1] + offset_y, vel_x, vel_y])
+                bullets.append([player_pos[0] - offset_x, player_pos[1] - offset_y, vel_x, vel_y])
+            elif weapon_level == 3:
+                bullets.append([player_pos[0], player_pos[1], vel_x, vel_y])
+                for angle_diff in [-20, 20]:
+                    s_rad = math.radians(player_angle + angle_diff)
+                    s_vel_x, s_vel_y = math.cos(s_rad) * bullet_speed, math.sin(s_rad) * bullet_speed
+                    bullets.append([player_pos[0], player_pos[1], s_vel_x, s_vel_y])
 
         if random.randint(0, enemy_spawn_rate) == 0:
             if not low_tier_enemy_destroyed:
@@ -206,6 +225,10 @@ while running:
 
         for e in enemies[:]:
             target_dx, target_dy = player_pos[0] - e[0], player_pos[1] - e[1]
+            if math.hypot(target_dx, target_dy) < 10:
+                if game_state == STATE_PLAYING:
+                    game_state = STATE_GAME_OVER
+                    game_over_time = pygame.time.get_ticks()
             target_angle = math.degrees(math.atan2(target_dy, target_dx))
             angle_diff = (target_angle - e[5] + 180) % 360 - 180
             turn_amount = min(enemy_rotation_speed, max(-enemy_rotation_speed, angle_diff))
@@ -216,9 +239,12 @@ while running:
             if random.randint(0, 70 // e[2]) == 0:
                 vel_x, vel_y = math.cos(rad) * enemy_bullet_speed, math.sin(rad) * enemy_bullet_speed
                 enemy_bullets.append([e[0], e[1], vel_x, vel_y, e[2]])
-            if math.hypot(target_dx, target_dy) < 10: game_state = STATE_GAME_OVER
 
         for eb in enemy_bullets[:]:
+            if math.hypot(player_pos[0] - eb[0], player_pos[1] - eb[1]) < 5:
+                if game_state == STATE_PLAYING:
+                    game_state = STATE_GAME_OVER
+                    game_over_time = pygame.time.get_ticks()
             if eb[4] >= 4: # Homing for high-tier
                 dx, dy = player_pos[0] - eb[0], player_pos[1] - eb[1]
                 dist = math.hypot(dx, dy)
@@ -228,7 +254,6 @@ while running:
                     eb[1] += (dy / dist) * homing_speed
             else: # Straight for low-tier
                 eb[0] += eb[2]; eb[1] += eb[3]
-            if math.hypot(player_pos[0] - eb[0], player_pos[1] - eb[1]) < 5: game_state = STATE_GAME_OVER
             if not (0 < eb[0] < WIDTH and 0 < eb[1] < HEIGHT):
                 if eb in enemy_bullets: enemy_bullets.remove(eb)
 
@@ -238,21 +263,30 @@ while running:
                     -ASTEROID_SPAWN_MARGIN < a[1] < HEIGHT + ASTEROID_SPAWN_MARGIN):
                 asteroids.remove(a)
 
+        # --- Collisions ---
         for b in bullets[:]:
-            collided = False
+            # Bullet vs Enemy Bullet
+            for eb in enemy_bullets[:]:
+                if b in bullets and eb in enemy_bullets and math.hypot(b[0] - eb[0], b[1] - eb[1]) < 4:
+                    bullets.remove(b)
+                    enemy_bullets.remove(eb)
+                    break 
+            if b not in bullets: continue 
+
+            # Bullet vs Enemy
             for e in enemies[:]:
                 if math.hypot(b[0] - e[0], b[1] - e[1]) < 10:
                     e[3] -= 1
                     if b in bullets: bullets.remove(b)
-                    collided = True
                     if e[3] <= 0:
-                        if e[2] < 4:
-                            low_tier_enemy_destroyed = True
+                        if e[2] < 4: low_tier_enemy_destroyed = True
                         score += e[2] * 10
                         enemies.remove(e)
                         if random.random() < 0.2: items.append([e[0], e[1]])
-                    break
-            if collided: continue
+                    break 
+            if b not in bullets: continue
+
+            # Bullet vs Asteroid
             for a in asteroids[:]:
                 if math.hypot(b[0] - a[0], b[1] - a[1]) < a[2]:
                     if a in asteroids: asteroids.remove(a)
@@ -289,11 +323,8 @@ while running:
 
     if game_state == STATE_GAME_OVER:
         game_over_text = game_font.render("GAME OVER", True, RED)
-        restart_text = info_font.render("Press any key to restart", True, WHITE)
-        text_rect = game_over_text.get_rect(center=(WIDTH/2, HEIGHT/2 - 20))
-        restart_rect = restart_text.get_rect(center=(WIDTH/2, HEIGHT/2 + 20))
+        text_rect = game_over_text.get_rect(center=(WIDTH/2, HEIGHT/2))
         low_res.blit(game_over_text, text_rect)
-        low_res.blit(restart_text, restart_rect)
 
     pygame.transform.scale(low_res, (WIDTH * SCALE, HEIGHT * SCALE), screen)
     pygame.display.flip()
