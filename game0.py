@@ -41,6 +41,8 @@ SHOOT_DELAY = 150
 LOOP_DURATION = 800
 LOOP_COOLDOWN = 5000
 LOOP_RADIUS = 40
+BOMB_INVINCIBILITY_DURATION = 2000
+BOMB_FLASH_DURATION = 300
 
 # AI constants
 EMERGENCY_DODGE_RADIUS = 40
@@ -83,6 +85,8 @@ class Player:
         self.max_hp = 3
         self.shield = 0
         self.max_shield = 3
+        self.bombs = 3
+        self.max_bombs = 5
         self.invincible_until = 0
         self.is_looping = False
         self.loop_start_time = 0
@@ -114,6 +118,16 @@ class Player:
 
     def upgrade_weapon(self):
         self.weapon_level = min(self.weapon_level + 1, 3)
+
+    def add_bomb(self):
+        self.bombs = min(self.bombs + 1, self.max_bombs)
+
+    def use_bomb(self, current_time):
+        if self.bombs > 0:
+            self.bombs -= 1
+            self.invincible_until = current_time + BOMB_INVINCIBILITY_DURATION
+            return True
+        return False
 
     def start_loop(self, current_time):
         if not self.is_looping and current_time - self.last_loop_time > LOOP_COOLDOWN:
@@ -485,11 +499,12 @@ class PowerUp:
     TYPE_WEAPON = "weapon"
     TYPE_HEALTH = "health"
     TYPE_SHIELD = "shield"
+    TYPE_BOMB = "bomb"
 
     def __init__(self, x, y, power_type=None):
         self.pos = [x, y]
         if power_type is None:
-            self.type = random.choice([self.TYPE_WEAPON, self.TYPE_HEALTH, self.TYPE_SHIELD])
+            self.type = random.choice([self.TYPE_WEAPON, self.TYPE_HEALTH, self.TYPE_SHIELD, self.TYPE_BOMB])
         else:
             self.type = power_type
 
@@ -502,8 +517,10 @@ class PowerUp:
             color = YELLOW
         elif self.type == self.TYPE_HEALTH:
             color = GREEN
-        else:  # SHIELD
+        elif self.type == self.TYPE_SHIELD:
             color = CYAN
+        else:  # BOMB
+            color = ORANGE
         pygame.draw.rect(surface, color, (self.pos[0]-2, self.pos[1]-2, 5, 5))
 
 
@@ -581,6 +598,7 @@ class Game:
         self.score = 0
         self.stage = 1
         self.stage_transition_time = None
+        self.bomb_flash_until = 0
         self.screen_shake_until = 0
         self.shake_offset = [0, 0]
         self.high_score = self.load_high_score()
@@ -635,6 +653,7 @@ class Game:
         self.score = 0
         self.stage = 1
         self.stage_transition_time = None
+        self.bomb_flash_until = 0
         self.screen_shake_until = 0
         self.shake_offset = [0, 0]
         self.low_tier_enemy_destroyed = False
@@ -754,6 +773,29 @@ class Game:
                         self.ai_enabled = not self.ai_enabled
                     if event.key == pygame.K_u:
                         self.player.start_loop(current_time)
+                    if event.key == pygame.K_b:
+                        if self.player.use_bomb(current_time):
+                            # Bomb activated
+                            self.bomb_flash_until = current_time + BOMB_FLASH_DURATION
+                            self.add_screen_shake(400)
+                            # Clear all enemies and bullets
+                            for e in self.enemies[:]:
+                                self.create_explosion(e.pos[0], e.pos[1], Enemy.TIER_COLORS[e.tier - 1], size=2)
+                                self.score += e.tier * 5
+                            self.enemies.clear()
+                            for eb in self.enemy_bullets[:]:
+                                for _ in range(2):
+                                    vel_x = random.uniform(-2, 2)
+                                    vel_y = random.uniform(-2, 2)
+                                    self.engine_particles.append(Particle(eb.pos[0], eb.pos[1], vel_x, vel_y, RED, size=2, lifetime=10))
+                            self.enemy_bullets.clear()
+                            # Damage boss
+                            if self.boss:
+                                for _ in range(10):
+                                    vel_x = random.uniform(-3, 3)
+                                    vel_y = random.uniform(-3, 3)
+                                    self.engine_particles.append(Particle(self.boss.pos[0], self.boss.pos[1], vel_x, vel_y, PURPLE, size=4, lifetime=20))
+                                self.boss.take_damage(50)  # Heavy damage to boss
 
         return True
 
@@ -1022,11 +1064,19 @@ class Game:
                     self.player.heal()
                 elif p.type == PowerUp.TYPE_SHIELD:
                     self.player.add_shield()
+                elif p.type == PowerUp.TYPE_BOMB:
+                    self.player.add_bomb()
                 self.powerups.remove(p)
 
     def draw(self):
         low_res = pygame.Surface((WIDTH, HEIGHT))
-        low_res.fill(BLACK)
+
+        # Bomb flash effect
+        current_time = pygame.time.get_ticks()
+        if current_time < self.bomb_flash_until:
+            low_res.fill(WHITE)
+        else:
+            low_res.fill(BLACK)
 
         # Draw background
         for s in self.stars:
@@ -1151,17 +1201,21 @@ class Game:
         weapon_text = self.info_font.render(f"Weapon: Lv.{self.player.weapon_level}", True, YELLOW)
         surface.blit(weapon_text, (5, 38))
 
+        # Bombs
+        bomb_text = self.info_font.render(f"Bombs[B]: {self.player.bombs}", True, ORANGE)
+        surface.blit(bomb_text, (5, 53))
+
         # Loop cooldown
         current_time = pygame.time.get_ticks()
         loop_ready = current_time - self.player.last_loop_time > LOOP_COOLDOWN
         loop_color = GREEN if loop_ready else GRAY
         loop_text = self.info_font.render("Loop[U]", True, loop_color)
-        surface.blit(loop_text, (5, 53))
+        surface.blit(loop_text, (5, 68))
 
         # AI indicator
         if self.ai_enabled:
             ai_text = self.info_font.render("AI ON", True, GREEN)
-            surface.blit(ai_text, (WIDTH - 50, 25))
+            surface.blit(ai_text, (WIDTH - 50, 45))
 
     def draw_game_over(self, surface):
         game_over_text = self.game_font.render("GAME OVER", True, RED)
