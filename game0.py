@@ -57,6 +57,11 @@ RESTART_DELAY = 3000
 TIME_SCORE_INTERVAL = 10000
 TIME_SCORE_AMOUNT = 1
 
+# Particle constants
+PARTICLE_LIFETIME = 30
+SCREEN_SHAKE_DURATION = 200
+SCREEN_SHAKE_INTENSITY = 3
+
 
 class Player:
     def __init__(self, x, y):
@@ -365,6 +370,49 @@ class PowerUp:
         pygame.draw.rect(surface, color, (self.pos[0]-2, self.pos[1]-2, 5, 5))
 
 
+class Particle:
+    def __init__(self, x, y, vel_x, vel_y, color, size=2, lifetime=PARTICLE_LIFETIME):
+        self.pos = [x, y]
+        self.vel = [vel_x, vel_y]
+        self.color = color
+        self.size = size
+        self.lifetime = lifetime
+        self.max_lifetime = lifetime
+
+    def update(self):
+        self.pos[0] += self.vel[0]
+        self.pos[1] += self.vel[1]
+        self.vel[0] *= 0.95
+        self.vel[1] *= 0.95
+        self.lifetime -= 1
+        return self.lifetime > 0
+
+    def draw(self, surface):
+        alpha_ratio = self.lifetime / self.max_lifetime
+        current_size = max(1, int(self.size * alpha_ratio))
+        pygame.draw.rect(surface, self.color, (int(self.pos[0]), int(self.pos[1]), current_size, current_size))
+
+
+class Explosion:
+    def __init__(self, x, y, color, particle_count=20, size=1):
+        self.particles = []
+        for _ in range(particle_count):
+            angle = random.uniform(0, 2 * math.pi)
+            speed = random.uniform(1, 4) * size
+            vel_x = math.cos(angle) * speed
+            vel_y = math.sin(angle) * speed
+            particle_size = random.randint(2, 4) * size
+            self.particles.append(Particle(x, y, vel_x, vel_y, color, particle_size))
+
+    def update(self):
+        self.particles = [p for p in self.particles if p.update()]
+        return len(self.particles) > 0
+
+    def draw(self, surface):
+        for p in self.particles:
+            p.draw(surface)
+
+
 class Game:
     def __init__(self):
         self.screen = pygame.display.set_mode((WIDTH * SCALE, HEIGHT * SCALE))
@@ -388,8 +436,12 @@ class Game:
         self.enemy_bullets = []
         self.asteroids = []
         self.powerups = []
+        self.explosions = []
+        self.engine_particles = []
 
         self.score = 0
+        self.screen_shake_until = 0
+        self.shake_offset = [0, 0]
         self.high_score = self.load_high_score()
         self.low_tier_enemy_destroyed = False
         self.last_shot_time = 0
@@ -414,6 +466,21 @@ class Game:
         except:
             pass
 
+    def add_screen_shake(self, duration=SCREEN_SHAKE_DURATION):
+        self.screen_shake_until = pygame.time.get_ticks() + duration
+
+    def update_screen_shake(self):
+        current_time = pygame.time.get_ticks()
+        if current_time < self.screen_shake_until:
+            self.shake_offset[0] = random.randint(-SCREEN_SHAKE_INTENSITY, SCREEN_SHAKE_INTENSITY)
+            self.shake_offset[1] = random.randint(-SCREEN_SHAKE_INTENSITY, SCREEN_SHAKE_INTENSITY)
+        else:
+            self.shake_offset = [0, 0]
+
+    def create_explosion(self, x, y, color, size=1):
+        self.explosions.append(Explosion(x, y, color, particle_count=int(20 * size), size=size))
+        self.add_screen_shake()
+
     def reset_game(self):
         self.player = Player(WIDTH / 2, HEIGHT / 2)
         self.bullets = []
@@ -421,7 +488,11 @@ class Game:
         self.enemy_bullets = []
         self.asteroids = []
         self.powerups = []
+        self.explosions = []
+        self.engine_particles = []
         self.score = 0
+        self.screen_shake_until = 0
+        self.shake_offset = [0, 0]
         self.low_tier_enemy_destroyed = False
         self.last_shot_time = 0
         self.last_time_score_tick = pygame.time.get_ticks()
@@ -546,6 +617,9 @@ class Game:
 
         current_time = pygame.time.get_ticks()
 
+        # Update screen shake
+        self.update_screen_shake()
+
         # Time-based score
         if current_time - self.last_time_score_tick > TIME_SCORE_INTERVAL:
             self.score += TIME_SCORE_AMOUNT
@@ -559,6 +633,17 @@ class Game:
         if move:
             self.bg_offset[0] = (self.bg_offset[0] - move[0]) % WIDTH
             self.bg_offset[1] = (self.bg_offset[1] - move[1]) % HEIGHT
+
+        # Create engine particles
+        if self.player.thrust > 0.5 and random.random() < 0.5:
+            rad = math.radians(self.player.angle + 180)
+            offset_dist = 10
+            particle_x = self.player.pos[0] + math.cos(rad) * offset_dist
+            particle_y = self.player.pos[1] + math.sin(rad) * offset_dist
+            vel_x = math.cos(rad) * self.player.thrust * 0.5 + random.uniform(-0.5, 0.5)
+            vel_y = math.sin(rad) * self.player.thrust * 0.5 + random.uniform(-0.5, 0.5)
+            color = random.choice([ORANGE, YELLOW, RED])
+            self.engine_particles.append(Particle(particle_x, particle_y, vel_x, vel_y, color, size=2, lifetime=15))
 
         # Auto-fire
         if not self.player.is_looping and current_time - self.last_shot_time > SHOOT_DELAY:
@@ -583,12 +668,23 @@ class Game:
         # Update enemies
         for e in self.enemies[:]:
             dist = e.update(self.player.pos)
-            if dist < 10 and self.player.take_damage():
-                self.state = STATE_GAME_OVER
-                self.game_over_time = current_time
-                if self.score > self.high_score:
-                    self.high_score = self.score
-                    self.save_high_score()
+            if dist < 10:
+                is_dead = self.player.take_damage()
+                if is_dead:
+                    # Player explosion
+                    self.create_explosion(self.player.pos[0], self.player.pos[1], WHITE, size=2)
+                    self.state = STATE_GAME_OVER
+                    self.game_over_time = current_time
+                    if self.score > self.high_score:
+                        self.high_score = self.score
+                        self.save_high_score()
+                else:
+                    # Hit effect
+                    self.add_screen_shake(100)
+                    for _ in range(8):
+                        vel_x = random.uniform(-3, 3)
+                        vel_y = random.uniform(-3, 3)
+                        self.engine_particles.append(Particle(self.player.pos[0], self.player.pos[1], vel_x, vel_y, RED, size=2, lifetime=15))
 
             if e.should_shoot():
                 self.enemy_bullets.append(e.shoot())
@@ -598,18 +694,32 @@ class Game:
             if not eb.update(self.player.pos):
                 self.enemy_bullets.remove(eb)
             elif math.hypot(self.player.pos[0] - eb.pos[0], self.player.pos[1] - eb.pos[1]) < 5:
-                if self.player.take_damage():
+                is_dead = self.player.take_damage()
+                if is_dead:
+                    # Player explosion
+                    self.create_explosion(self.player.pos[0], self.player.pos[1], WHITE, size=2)
                     self.state = STATE_GAME_OVER
                     self.game_over_time = current_time
                     if self.score > self.high_score:
                         self.high_score = self.score
                         self.save_high_score()
+                else:
+                    # Hit effect
+                    self.add_screen_shake(100)
+                    for _ in range(8):
+                        vel_x = random.uniform(-3, 3)
+                        vel_y = random.uniform(-3, 3)
+                        self.engine_particles.append(Particle(self.player.pos[0], self.player.pos[1], vel_x, vel_y, RED, size=2, lifetime=15))
 
         # Update asteroids
         self.asteroids = [a for a in self.asteroids if a.update()]
 
         # Update powerups
         self.powerups = [p for p in self.powerups if p.update()]
+
+        # Update particles and explosions
+        self.engine_particles = [p for p in self.engine_particles if p.update()]
+        self.explosions = [e for e in self.explosions if e.update()]
 
         # Handle collisions
         self.handle_collisions()
@@ -622,6 +732,11 @@ class Game:
                     if math.hypot(b.pos[0] - eb.pos[0], b.pos[1] - eb.pos[1]) < 4:
                         self.bullets.remove(b)
                         self.enemy_bullets.remove(eb)
+                        # Small spark effect
+                        for _ in range(3):
+                            vel_x = random.uniform(-2, 2)
+                            vel_y = random.uniform(-2, 2)
+                            self.engine_particles.append(Particle(b.pos[0], b.pos[1], vel_x, vel_y, WHITE, size=1, lifetime=10))
                         break
             if b not in self.bullets:
                 continue
@@ -631,10 +746,19 @@ class Game:
                 if math.hypot(b.pos[0] - e.pos[0], b.pos[1] - e.pos[1]) < 10:
                     if b in self.bullets:
                         self.bullets.remove(b)
+                    # Hit spark
+                    for _ in range(5):
+                        vel_x = random.uniform(-1, 1)
+                        vel_y = random.uniform(-1, 1)
+                        self.engine_particles.append(Particle(e.pos[0], e.pos[1], vel_x, vel_y, YELLOW, size=2, lifetime=12))
+
                     if e.take_damage():
                         if e.tier < 4:
                             self.low_tier_enemy_destroyed = True
                         self.score += e.tier * 10
+                        # Create explosion based on enemy tier
+                        explosion_color = Enemy.TIER_COLORS[e.tier - 1]
+                        self.create_explosion(e.pos[0], e.pos[1], explosion_color, size=e.tier * 0.5)
                         self.enemies.remove(e)
                         if random.random() < 0.3:
                             self.powerups.append(PowerUp(e.pos[0], e.pos[1]))
@@ -647,6 +771,11 @@ class Game:
             for a in self.asteroids[:]:
                 if math.hypot(b.pos[0] - a.pos[0], b.pos[1] - a.pos[1]) < a.size:
                     if a in self.asteroids:
+                        # Asteroid fragments
+                        for _ in range(a.size):
+                            vel_x = random.uniform(-2, 2)
+                            vel_y = random.uniform(-2, 2)
+                            self.engine_particles.append(Particle(a.pos[0], a.pos[1], vel_x, vel_y, GRAY, size=3, lifetime=20))
                         self.asteroids.remove(a)
                     if b in self.bullets:
                         self.bullets.remove(b)
@@ -671,18 +800,22 @@ class Game:
 
         # Draw background
         for s in self.stars:
-            x = (s[0] + self.bg_offset[0]) % WIDTH
-            y = (s[1] + self.bg_offset[1]) % HEIGHT
+            x = (s[0] + self.bg_offset[0] + self.shake_offset[0]) % WIDTH
+            y = (s[1] + self.bg_offset[1] + self.shake_offset[1]) % HEIGHT
             pygame.draw.rect(low_res, s[2], (x, y, 1, 1))
 
         for d in self.dust:
-            x = (d[0] + self.bg_offset[0] * 0.5) % WIDTH
-            y = (d[1] + self.bg_offset[1] * 0.5) % HEIGHT
+            x = (d[0] + self.bg_offset[0] * 0.5 + self.shake_offset[0]) % WIDTH
+            y = (d[1] + self.bg_offset[1] * 0.5 + self.shake_offset[1]) % HEIGHT
             pygame.draw.rect(low_res, d[2], (x, y, 2, 2))
 
         if self.state == STATE_MENU:
             self.draw_menu(low_res)
         elif self.state == STATE_PLAYING or self.state == STATE_PAUSED:
+            # Draw particles (behind everything)
+            for p in self.engine_particles:
+                p.draw(low_res)
+
             # Draw game objects
             self.player.draw(low_res)
             for b in self.bullets:
@@ -695,6 +828,10 @@ class Game:
                 a.draw(low_res)
             for p in self.powerups:
                 p.draw(low_res)
+
+            # Draw explosions (in front of everything)
+            for exp in self.explosions:
+                exp.draw(low_res)
 
             # Draw HUD
             self.draw_hud(low_res)
