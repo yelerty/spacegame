@@ -162,7 +162,7 @@ class Player:
             return
 
         if ai_enabled:
-            ai_update_func(self)
+            ai_update_func()  # Don't pass self - the function already has access to game object
         else:
             if keys[pygame.K_LEFT]:
                 self.angle -= ROTATION_SPEED
