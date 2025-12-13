@@ -666,20 +666,78 @@ class Game:
         self.state = STATE_PLAYING
 
     def update_ai(self):
-        all_threats = []
-        for e in self.enemies:
-            all_threats.append({'pos': e.pos, 'threat': 6.0 * e.tier})
-        for a in self.asteroids:
-            all_threats.append({'pos': a.pos, 'threat': 3.0})
-        for eb in self.enemy_bullets:
-            all_threats.append({'pos': eb.pos, 'threat': 25.0})
-        if self.boss:
-            all_threats.append({'pos': self.boss.pos, 'threat': 50.0})
+        current_time = pygame.time.get_ticks()
 
-        # Emergency dodge
+        # Analyze situation
+        all_threats = []
+        nearby_bullets = 0
+        nearby_enemies = 0
+
+        for e in self.enemies:
+            dist = math.hypot(self.player.pos[0] - e.pos[0], self.player.pos[1] - e.pos[1])
+            all_threats.append({'pos': e.pos, 'threat': 6.0 * e.tier, 'dist': dist})
+            if dist < 80:
+                nearby_enemies += 1
+
+        for a in self.asteroids:
+            dist = math.hypot(self.player.pos[0] - a.pos[0], self.player.pos[1] - a.pos[1])
+            all_threats.append({'pos': a.pos, 'threat': 3.0, 'dist': dist})
+
+        for eb in self.enemy_bullets:
+            dist = math.hypot(self.player.pos[0] - eb.pos[0], self.player.pos[1] - eb.pos[1])
+            all_threats.append({'pos': eb.pos, 'threat': 25.0, 'dist': dist})
+            if dist < 60:
+                nearby_bullets += 1
+
+        if self.boss:
+            dist = math.hypot(self.player.pos[0] - self.boss.pos[0], self.player.pos[1] - self.boss.pos[1])
+            all_threats.append({'pos': self.boss.pos, 'threat': 50.0, 'dist': dist})
+
+        # Decision making: Use bomb if overwhelmed
+        hp_ratio = self.player.hp / self.player.max_hp
+        danger_level = nearby_bullets * 2 + nearby_enemies
+
+        if self.player.bombs > 0 and not self.player.is_looping:
+            # Use bomb if: low HP + many threats OR too many bullets
+            should_bomb = (hp_ratio <= 0.33 and danger_level >= 4) or nearby_bullets >= 6
+            if should_bomb:
+                if self.player.use_bomb(current_time):
+                    self.bomb_flash_until = current_time + BOMB_FLASH_DURATION
+                    self.add_screen_shake(400)
+                    for e in self.enemies[:]:
+                        self.create_explosion(e.pos[0], e.pos[1], Enemy.TIER_COLORS[e.tier - 1], size=2)
+                        self.score += e.tier * 5
+                    self.enemies.clear()
+                    for eb in self.enemy_bullets[:]:
+                        for _ in range(2):
+                            vel_x = random.uniform(-2, 2)
+                            vel_y = random.uniform(-2, 2)
+                            self.engine_particles.append(Particle(eb.pos[0], eb.pos[1], vel_x, vel_y, RED, size=2, lifetime=10))
+                    self.enemy_bullets.clear()
+                    if self.boss:
+                        for _ in range(10):
+                            vel_x = random.uniform(-3, 3)
+                            vel_y = random.uniform(-3, 3)
+                            self.engine_particles.append(Particle(self.boss.pos[0], self.boss.pos[1], vel_x, vel_y, PURPLE, size=4, lifetime=20))
+                        self.boss.take_damage(50)
+                    return
+
+        # Decision making: Use loop for emergency escape
+        loop_ready = current_time - self.player.last_loop_time > LOOP_COOLDOWN
+        if loop_ready and not self.player.is_looping:
+            # Use loop if surrounded or many bullets nearby
+            should_loop = danger_level >= 5 or nearby_bullets >= 4
+            if should_loop:
+                self.player.start_loop(current_time)
+                return
+
+        # Emergency dodge - use loop if available, otherwise dodge
         for t in all_threats:
-            dist = math.hypot(self.player.pos[0] - t['pos'][0], self.player.pos[1] - t['pos'][1])
-            if dist < EMERGENCY_DODGE_RADIUS:
+            if t['dist'] < EMERGENCY_DODGE_RADIUS:
+                if loop_ready and not self.player.is_looping and t['threat'] >= 20:
+                    self.player.start_loop(current_time)
+                    return
+
                 repulsion_vec_x = self.player.pos[0] - t['pos'][0]
                 repulsion_vec_y = self.player.pos[1] - t['pos'][1]
                 target_angle = math.degrees(math.atan2(repulsion_vec_y, repulsion_vec_x))
@@ -692,31 +750,65 @@ class Game:
         # General avoidance and targeting
         steer_vec = [0.0, 0.0]
         for t in all_threats:
-            dist = math.hypot(self.player.pos[0] - t['pos'][0], self.player.pos[1] - t['pos'][1])
-            if dist < PERCEPTION_RADIUS:
+            if t['dist'] < PERCEPTION_RADIUS:
                 repulsion_vec_x = self.player.pos[0] - t['pos'][0]
                 repulsion_vec_y = self.player.pos[1] - t['pos'][1]
-                weight = t['threat'] / (dist**2 + 1)
-                steer_vec[0] += repulsion_vec_x / (dist + 0.1) * weight
-                steer_vec[1] += repulsion_vec_y / (dist + 0.1) * weight
+                weight = t['threat'] / (t['dist']**2 + 1)
+                steer_vec[0] += repulsion_vec_x / (t['dist'] + 0.1) * weight
+                steer_vec[1] += repulsion_vec_y / (t['dist'] + 0.1) * weight
 
+        # Smart targeting: prioritize powerups based on need
         target_pos = None
         is_enemy_target = False
-        if self.enemies:
-            self.enemies.sort(key=lambda e: math.hypot(self.player.pos[0] - e.pos[0],
-                                                        self.player.pos[1] - e.pos[1]))
-            target_pos = self.enemies[0].pos
-            is_enemy_target = True
-        elif self.powerups:
-            self.powerups.sort(key=lambda i: math.hypot(self.player.pos[0] - i.pos[0],
-                                                         self.player.pos[1] - i.pos[1]))
-            target_pos = self.powerups[0].pos
+
+        # If low HP, prioritize health powerups
+        if hp_ratio <= 0.5 and self.powerups:
+            health_powerups = [p for p in self.powerups if p.type == PowerUp.TYPE_HEALTH]
+            if health_powerups:
+                health_powerups.sort(key=lambda p: math.hypot(self.player.pos[0] - p.pos[0],
+                                                               self.player.pos[1] - p.pos[1]))
+                target_pos = health_powerups[0].pos
+
+        # If no shield, prioritize shield powerups
+        elif self.player.shield == 0 and self.powerups:
+            shield_powerups = [p for p in self.powerups if p.type == PowerUp.TYPE_SHIELD]
+            if shield_powerups:
+                shield_powerups.sort(key=lambda p: math.hypot(self.player.pos[0] - p.pos[0],
+                                                               self.player.pos[1] - p.pos[1]))
+                target_pos = shield_powerups[0].pos
+
+        # Default: target enemies or nearest powerup
+        if not target_pos:
+            if self.enemies or self.boss:
+                # Target weakest nearby enemy first
+                if self.enemies:
+                    nearby_enemies_list = [e for e in self.enemies if
+                                          math.hypot(self.player.pos[0] - e.pos[0],
+                                                    self.player.pos[1] - e.pos[1]) < 150]
+                    if nearby_enemies_list:
+                        nearby_enemies_list.sort(key=lambda e: (e.tier, math.hypot(self.player.pos[0] - e.pos[0],
+                                                                                    self.player.pos[1] - e.pos[1])))
+                        target_pos = nearby_enemies_list[0].pos
+                        is_enemy_target = True
+                    else:
+                        self.enemies.sort(key=lambda e: math.hypot(self.player.pos[0] - e.pos[0],
+                                                                   self.player.pos[1] - e.pos[1]))
+                        target_pos = self.enemies[0].pos
+                        is_enemy_target = True
+                elif self.boss:
+                    target_pos = self.boss.pos
+                    is_enemy_target = True
+            elif self.powerups:
+                self.powerups.sort(key=lambda p: math.hypot(self.player.pos[0] - p.pos[0],
+                                                             self.player.pos[1] - p.pos[1]))
+                target_pos = self.powerups[0].pos
 
         final_vec = list(steer_vec)
         steer_magnitude = math.hypot(steer_vec[0], steer_vec[1])
 
         if target_pos:
-            attraction_weight = 0.25
+            # Adjust attraction based on health
+            attraction_weight = 0.3 if hp_ratio > 0.5 else 0.15
             if steer_magnitude > 1.0:
                 attraction_weight /= (steer_magnitude * 2)
             dx = target_pos[0] - self.player.pos[0]
@@ -732,16 +824,21 @@ class Game:
             turn_amount = min(ROTATION_SPEED, max(-ROTATION_SPEED, angle_diff))
             self.player.angle += turn_amount
 
+        # Adaptive movement
         if steer_magnitude > 0.5:
             self.player.thrust = min(MAX_THRUST, self.player.thrust + THRUST_ACCEL * 2)
         elif target_pos and is_enemy_target:
             dist_to_target = math.hypot(self.player.pos[0] - target_pos[0],
                                        self.player.pos[1] - target_pos[1])
-            optimal_dist = 100
+            # Better distance management for boss
+            optimal_dist = 120 if self.boss else 90
             if dist_to_target > optimal_dist:
                 self.player.thrust = min(MAX_THRUST, self.player.thrust + THRUST_ACCEL)
-            else:
+            elif dist_to_target < optimal_dist - 30:
                 self.player.thrust = max(0, self.player.thrust - THRUST_ACCEL * 2)
+            else:
+                # Maintain distance - strafe
+                self.player.thrust = min(MAX_THRUST * 0.6, self.player.thrust + THRUST_ACCEL * 0.5)
         elif target_pos:
             self.player.thrust = min(MAX_THRUST, self.player.thrust + THRUST_ACCEL)
         else:
@@ -1205,7 +1302,9 @@ class Game:
         # Controls
         controls = [
             ("Arrow Keys: Move & Rotate", WHITE),
-            ("A: Toggle AI Auto-Pilot", GREEN),
+            ("A: Smart AI Auto-Pilot", GREEN),
+            ("  -Uses Loop & Bomb", GREEN),
+            ("  -Prioritizes survival", GREEN),
             ("U: Loop (Special Move)", PURPLE),
             ("B: Bomb (Clear Screen)", ORANGE),
             ("ESC: Pause Game", GRAY),
