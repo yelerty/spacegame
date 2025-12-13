@@ -57,6 +57,10 @@ BOSS_HP = 200
 BOSS_SPEED = 1.5
 BOSS_SIZE = 40
 
+# Stage constants
+STAGE_SCORE_INTERVAL = 200
+STAGE_TRANSITION_DURATION = 2000
+
 # Other constants
 ASTEROID_SPAWN_MARGIN = 20
 RESTART_DELAY = 3000
@@ -575,6 +579,8 @@ class Game:
         self.boss_defeated_count = 0
 
         self.score = 0
+        self.stage = 1
+        self.stage_transition_time = None
         self.screen_shake_until = 0
         self.shake_offset = [0, 0]
         self.high_score = self.load_high_score()
@@ -627,6 +633,8 @@ class Game:
         self.engine_particles = []
         self.boss = None
         self.score = 0
+        self.stage = 1
+        self.stage_transition_time = None
         self.screen_shake_until = 0
         self.shake_offset = [0, 0]
         self.low_tier_enemy_destroyed = False
@@ -763,6 +771,12 @@ class Game:
             self.score += TIME_SCORE_AMOUNT
             self.last_time_score_tick += TIME_SCORE_INTERVAL
 
+        # Stage progression
+        new_stage = (self.score // STAGE_SCORE_INTERVAL) + 1
+        if new_stage > self.stage:
+            self.stage = new_stage
+            self.stage_transition_time = current_time
+
         # Update player
         self.player.update_loop(current_time)
         keys = pygame.key.get_pressed()
@@ -796,16 +810,29 @@ class Game:
             self.enemies.clear()
             self.enemy_bullets.clear()
 
-        # Spawn enemies (only if no boss)
-        if self.boss is None and random.randint(0, ENEMY_SPAWN_RATE) == 0:
+        # Spawn enemies (only if no boss) - difficulty scales with stage
+        enemy_spawn_rate = max(20, ENEMY_SPAWN_RATE - self.stage * 2)  # Gets faster each stage
+        if self.boss is None and random.randint(0, enemy_spawn_rate) == 0:
             if not self.low_tier_enemy_destroyed:
                 tier = random.choices([1, 2, 3], Enemy.LOW_TIER_PROBS)[0]
             else:
-                tier = random.choices([1, 2, 3, 4, 5, 6], Enemy.TIER_SPAWN_PROBS)[0]
+                # Higher stages increase chance of high-tier enemies
+                adjusted_probs = list(Enemy.TIER_SPAWN_PROBS)
+                for i in range(min(self.stage - 1, 3)):
+                    # Shift probability towards higher tiers
+                    for j in range(len(adjusted_probs) - 1):
+                        transfer = adjusted_probs[j] * 0.1
+                        adjusted_probs[j] -= transfer
+                        adjusted_probs[j + 1] += transfer
+                # Normalize
+                total = sum(adjusted_probs)
+                adjusted_probs = [p / total for p in adjusted_probs]
+                tier = random.choices([1, 2, 3, 4, 5, 6], adjusted_probs)[0]
             self.enemies.append(Enemy(tier))
 
-        # Spawn asteroids (only if no boss)
-        if self.boss is None and random.randint(0, 100) == 0:
+        # Spawn asteroids (only if no boss) - more asteroids in higher stages
+        asteroid_spawn_rate = max(30, 100 - self.stage * 5)
+        if self.boss is None and random.randint(0, asteroid_spawn_rate) == 0:
             self.asteroids.append(Asteroid())
 
         # Update bullets
@@ -1047,6 +1074,23 @@ class Game:
             if self.boss:
                 self.boss.draw_health_bar(low_res)
 
+            # Draw stage transition notification
+            if self.stage_transition_time:
+                elapsed = current_time - self.stage_transition_time
+                if elapsed < STAGE_TRANSITION_DURATION:
+                    # Fade effect
+                    alpha_ratio = 1.0 - (elapsed / STAGE_TRANSITION_DURATION)
+                    if alpha_ratio > 0.5:
+                        alpha_ratio = 1.0
+                    else:
+                        alpha_ratio = alpha_ratio * 2
+
+                    stage_notify = self.game_font.render(f"STAGE {self.stage}", True, CYAN)
+                    notify_rect = stage_notify.get_rect(center=(WIDTH/2, HEIGHT/2))
+                    low_res.blit(stage_notify, notify_rect)
+                else:
+                    self.stage_transition_time = None
+
             if self.state == STATE_PAUSED:
                 pause_text = self.game_font.render("PAUSED", True, YELLOW)
                 text_rect = pause_text.get_rect(center=(WIDTH/2, HEIGHT/2))
@@ -1081,9 +1125,12 @@ class Game:
         surface.blit(quit_text, quit_rect)
 
     def draw_hud(self, surface):
-        # Score
+        # Score and Stage
         score_text = self.info_font.render(f"Score: {self.score}", True, WHITE)
         surface.blit(score_text, (WIDTH - 95, 5))
+
+        stage_text = self.info_font.render(f"Stage {self.stage}", True, CYAN)
+        surface.blit(stage_text, (WIDTH - 85, 25))
 
         # Health bar
         hp_text = self.info_font.render("HP:", True, WHITE)
