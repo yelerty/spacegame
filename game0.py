@@ -40,7 +40,7 @@ THRUST_ACCEL = 0.2
 BULLET_SPEED = 7
 SHOOT_DELAY = 150
 LOOP_DURATION = 800
-LOOP_COOLDOWN = 5000
+LOOP_COOLDOWN = 3000  # Reduced from 5000 for more frequent use
 LOOP_RADIUS = 40
 BOMB_INVINCIBILITY_DURATION = 2000
 BOMB_FLASH_DURATION = 300
@@ -50,13 +50,13 @@ EMERGENCY_DODGE_RADIUS = 40
 PERCEPTION_RADIUS = 120
 
 # Enemy constants
-ENEMY_SPAWN_RATE = 50
+ENEMY_SPAWN_RATE = 60  # Increased from 50 to slow down spawning
 ENEMY_BULLET_SPEED = 3.0
 ENEMY_ROTATION_SPEED = 2.5
 
 # Boss constants
 BOSS_SPAWN_SCORE = 500
-BOSS_HP = 200
+BOSS_HP = 250  # Increased from 200 for more challenge
 BOSS_SPEED = 1.5
 BOSS_SIZE = 40
 
@@ -84,9 +84,9 @@ class Player:
         self.weapon_level = 1
         self.hp = 3
         self.max_hp = 3
-        self.shield = 0
+        self.shield = 0  # Start with no shield for challenge
         self.max_shield = 3
-        self.bombs = 3
+        self.bombs = 2  # Start with 2 bombs instead of 3
         self.max_bombs = 5
         self.invincible_until = 0
         self.is_looping = False
@@ -108,7 +108,7 @@ class Player:
             return False
         else:
             self.hp -= amount
-            self.invincible_until = pygame.time.get_ticks() + 1000
+            self.invincible_until = pygame.time.get_ticks() + 1500  # 1.5 seconds invincibility
             return self.hp <= 0
 
     def heal(self, amount=1):
@@ -1044,7 +1044,9 @@ class Game:
                         explosion_color = Enemy.TIER_COLORS[e.tier - 1]
                         self.create_explosion(e.pos[0], e.pos[1], explosion_color, size=e.tier * 0.5)
                         self.enemies.remove(e)
-                        if random.random() < 0.3:
+                        # Higher tier enemies drop powerups more frequently
+                        drop_chance = 0.15 + (e.tier * 0.05)  # 20% for tier 1, 45% for tier 6
+                        if random.random() < drop_chance:
                             self.powerups.append(PowerUp(e.pos[0], e.pos[1]))
                     break
 
@@ -1063,7 +1065,7 @@ class Game:
                         self.asteroids.remove(a)
                     if b in self.bullets:
                         self.bullets.remove(b)
-                    if random.random() < 0.15:
+                    if random.random() < 0.12:  # Slightly reduced from 0.15
                         self.powerups.append(PowerUp(a.pos[0], a.pos[1]))
                     break
 
