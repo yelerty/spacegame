@@ -31,6 +31,7 @@ STATE_MENU = "menu"
 STATE_PLAYING = "playing"
 STATE_PAUSED = "paused"
 STATE_GAME_OVER = "game_over"
+STATE_HELP = "help"
 
 # Player constants
 ROTATION_SPEED = 4.5
@@ -754,11 +755,22 @@ class Game:
                 return False
 
             if event.type == pygame.KEYDOWN:
+                # Help toggle (works in any state except playing)
+                if event.key == pygame.K_h:
+                    if self.state == STATE_MENU:
+                        self.state = STATE_HELP
+                    elif self.state == STATE_HELP:
+                        self.state = STATE_MENU
+                    elif self.state == STATE_PAUSED:
+                        self.state = STATE_HELP
+
                 if event.key == pygame.K_ESCAPE:
                     if self.state == STATE_PLAYING:
                         self.state = STATE_PAUSED
                     elif self.state == STATE_PAUSED:
                         self.state = STATE_PLAYING
+                    elif self.state == STATE_HELP:
+                        self.state = STATE_MENU
                     elif self.state == STATE_MENU:
                         return False
 
@@ -1091,6 +1103,8 @@ class Game:
 
         if self.state == STATE_MENU:
             self.draw_menu(low_res)
+        elif self.state == STATE_HELP:
+            self.draw_help(low_res)
         elif self.state == STATE_PLAYING or self.state == STATE_PAUSED:
             # Draw particles (behind everything)
             for p in self.engine_particles:
@@ -1170,9 +1184,51 @@ class Game:
         hs_rect = high_score_text.get_rect(center=(WIDTH/2, HEIGHT/2 + 30))
         surface.blit(high_score_text, hs_rect)
 
+        help_text = self.info_font.render("Press H for Help", True, GREEN)
+        help_rect = help_text.get_rect(center=(WIDTH/2, HEIGHT/2 + 50))
+        surface.blit(help_text, help_rect)
+
         quit_text = self.info_font.render("Press Q to Quit", True, GRAY)
         quit_rect = quit_text.get_rect(center=(WIDTH/2, HEIGHT - 30))
         surface.blit(quit_text, quit_rect)
+
+    def draw_help(self, surface):
+        title = self.game_font.render("CONTROLS", True, CYAN)
+        title_rect = title.get_rect(center=(WIDTH/2, 15))
+        surface.blit(title, title_rect)
+
+        y_offset = 35
+        line_height = 14
+
+        # Controls
+        controls = [
+            ("Arrow Keys: Move & Rotate", WHITE),
+            ("A: Toggle AI Auto-Pilot", GREEN),
+            ("U: Loop (Special Move)", PURPLE),
+            ("B: Bomb (Clear Screen)", ORANGE),
+            ("ESC: Pause Game", GRAY),
+            ("", BLACK),
+            ("POWERUPS:", CYAN),
+            ("Yellow: Weapon Upgrade", YELLOW),
+            ("Green: Health +1", GREEN),
+            ("Cyan: Shield +1", CYAN),
+            ("Orange: Bomb +1", ORANGE),
+            ("", BLACK),
+            ("GOAL:", YELLOW),
+            ("Destroy enemies & bosses!", WHITE),
+            ("Boss every 500 points", WHITE),
+            ("Stage up every 200 pts", WHITE),
+        ]
+
+        for text, color in controls:
+            if text:
+                line = self.info_font.render(text, True, color)
+                surface.blit(line, (10, y_offset))
+            y_offset += line_height
+
+        back_text = self.info_font.render("Press H or ESC to go back", True, GRAY)
+        back_rect = back_text.get_rect(center=(WIDTH/2, HEIGHT - 10))
+        surface.blit(back_text, back_rect)
 
     def draw_hud(self, surface):
         # Score and Stage
