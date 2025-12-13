@@ -51,6 +51,12 @@ ENEMY_SPAWN_RATE = 50
 ENEMY_BULLET_SPEED = 3.0
 ENEMY_ROTATION_SPEED = 2.5
 
+# Boss constants
+BOSS_SPAWN_SCORE = 500
+BOSS_HP = 200
+BOSS_SPEED = 1.5
+BOSS_SIZE = 40
+
 # Other constants
 ASTEROID_SPAWN_MARGIN = 20
 RESTART_DELAY = 3000
@@ -309,6 +315,133 @@ class EnemyBullet:
         pygame.draw.rect(surface, RED, (self.pos[0], self.pos[1], 2, 2))
 
 
+class Boss:
+    def __init__(self):
+        self.pos = [WIDTH / 2, 50]
+        self.hp = BOSS_HP
+        self.max_hp = BOSS_HP
+        self.speed = BOSS_SPEED
+        self.size = BOSS_SIZE
+        self.direction = 1
+        self.attack_timer = 0
+        self.attack_pattern = 0
+        self.phase = 1
+
+    def update(self, target_pos):
+        # Move horizontally
+        self.pos[0] += self.speed * self.direction
+        if self.pos[0] > WIDTH - self.size or self.pos[0] < self.size:
+            self.direction *= -1
+
+        # Update phase based on HP
+        hp_ratio = self.hp / self.max_hp
+        if hp_ratio > 0.66:
+            self.phase = 1
+        elif hp_ratio > 0.33:
+            self.phase = 2
+        else:
+            self.phase = 3
+
+        # Attack timer
+        self.attack_timer += 1
+
+    def should_shoot(self):
+        # Phase 3 shoots faster
+        shoot_interval = 60 if self.phase < 3 else 30
+        if self.attack_timer >= shoot_interval:
+            self.attack_timer = 0
+            return True
+        return False
+
+    def shoot(self, target_pos):
+        bullets = []
+
+        if self.phase == 1:
+            # Pattern 1: Aimed shot
+            dx = target_pos[0] - self.pos[0]
+            dy = target_pos[1] - self.pos[1]
+            dist = math.hypot(dx, dy)
+            if dist > 0:
+                vel_x = (dx / dist) * ENEMY_BULLET_SPEED
+                vel_y = (dy / dist) * ENEMY_BULLET_SPEED
+                bullets.append(EnemyBullet(self.pos[0], self.pos[1], vel_x, vel_y, 5))
+
+        elif self.phase == 2:
+            # Pattern 2: Triple shot
+            for angle_offset in [-15, 0, 15]:
+                dx = target_pos[0] - self.pos[0]
+                dy = target_pos[1] - self.pos[1]
+                base_angle = math.atan2(dy, dx)
+                angle = base_angle + math.radians(angle_offset)
+                vel_x = math.cos(angle) * ENEMY_BULLET_SPEED
+                vel_y = math.sin(angle) * ENEMY_BULLET_SPEED
+                bullets.append(EnemyBullet(self.pos[0], self.pos[1], vel_x, vel_y, 5))
+
+        else:  # Phase 3
+            # Pattern 3: Circular pattern
+            num_bullets = 8
+            for i in range(num_bullets):
+                angle = (2 * math.pi / num_bullets) * i + (self.attack_timer * 0.1)
+                vel_x = math.cos(angle) * ENEMY_BULLET_SPEED
+                vel_y = math.sin(angle) * ENEMY_BULLET_SPEED
+                bullets.append(EnemyBullet(self.pos[0], self.pos[1], vel_x, vel_y, 6))
+
+        return bullets
+
+    def take_damage(self, amount=1):
+        self.hp -= amount
+        return self.hp <= 0
+
+    def draw(self, surface):
+        # Draw boss body (large diamond shape)
+        points = [
+            (self.pos[0], self.pos[1] - self.size),  # Top
+            (self.pos[0] + self.size, self.pos[1]),  # Right
+            (self.pos[0], self.pos[1] + self.size),  # Bottom
+            (self.pos[0] - self.size, self.pos[1])   # Left
+        ]
+
+        # Color changes based on phase
+        if self.phase == 1:
+            color = PURPLE
+        elif self.phase == 2:
+            color = ORANGE
+        else:
+            color = RED
+
+        pygame.draw.polygon(surface, color, points)
+
+        # Draw core
+        core_size = self.size // 3
+        pygame.draw.circle(surface, WHITE, (int(self.pos[0]), int(self.pos[1])), core_size)
+
+    def draw_health_bar(self, surface):
+        # Boss health bar at top
+        bar_width = WIDTH - 40
+        bar_height = 8
+        bar_x = 20
+        bar_y = 10
+
+        # Background
+        pygame.draw.rect(surface, GRAY, (bar_x, bar_y, bar_width, bar_height))
+
+        # Health
+        hp_ratio = max(0, self.hp / self.max_hp)
+        health_width = int(bar_width * hp_ratio)
+
+        if self.phase == 1:
+            hp_color = GREEN
+        elif self.phase == 2:
+            hp_color = YELLOW
+        else:
+            hp_color = RED
+
+        pygame.draw.rect(surface, hp_color, (bar_x, bar_y, health_width, bar_height))
+
+        # Border
+        pygame.draw.rect(surface, WHITE, (bar_x, bar_y, bar_width, bar_height), 1)
+
+
 class Asteroid:
     def __init__(self):
         self.size = random.randint(5, 15)
@@ -438,6 +571,8 @@ class Game:
         self.powerups = []
         self.explosions = []
         self.engine_particles = []
+        self.boss = None
+        self.boss_defeated_count = 0
 
         self.score = 0
         self.screen_shake_until = 0
@@ -490,6 +625,7 @@ class Game:
         self.powerups = []
         self.explosions = []
         self.engine_particles = []
+        self.boss = None
         self.score = 0
         self.screen_shake_until = 0
         self.shake_offset = [0, 0]
@@ -509,6 +645,8 @@ class Game:
             all_threats.append({'pos': a.pos, 'threat': 3.0})
         for eb in self.enemy_bullets:
             all_threats.append({'pos': eb.pos, 'threat': 25.0})
+        if self.boss:
+            all_threats.append({'pos': self.boss.pos, 'threat': 50.0})
 
         # Emergency dodge
         for t in all_threats:
@@ -650,16 +788,24 @@ class Game:
             self.last_shot_time = current_time
             self.bullets.extend(self.player.shoot())
 
-        # Spawn enemies
-        if random.randint(0, ENEMY_SPAWN_RATE) == 0:
+        # Boss spawning
+        boss_threshold = BOSS_SPAWN_SCORE * (self.boss_defeated_count + 1)
+        if self.boss is None and self.score >= boss_threshold:
+            self.boss = Boss()
+            # Clear all enemies and bullets when boss spawns
+            self.enemies.clear()
+            self.enemy_bullets.clear()
+
+        # Spawn enemies (only if no boss)
+        if self.boss is None and random.randint(0, ENEMY_SPAWN_RATE) == 0:
             if not self.low_tier_enemy_destroyed:
                 tier = random.choices([1, 2, 3], Enemy.LOW_TIER_PROBS)[0]
             else:
                 tier = random.choices([1, 2, 3, 4, 5, 6], Enemy.TIER_SPAWN_PROBS)[0]
             self.enemies.append(Enemy(tier))
 
-        # Spawn asteroids
-        if random.randint(0, 100) == 0:
+        # Spawn asteroids (only if no boss)
+        if self.boss is None and random.randint(0, 100) == 0:
             self.asteroids.append(Asteroid())
 
         # Update bullets
@@ -711,6 +857,34 @@ class Game:
                         vel_y = random.uniform(-3, 3)
                         self.engine_particles.append(Particle(self.player.pos[0], self.player.pos[1], vel_x, vel_y, RED, size=2, lifetime=15))
 
+        # Update boss
+        if self.boss:
+            self.boss.update(self.player.pos)
+
+            # Boss collision with player
+            dist_to_player = math.hypot(self.boss.pos[0] - self.player.pos[0],
+                                       self.boss.pos[1] - self.player.pos[1])
+            if dist_to_player < self.boss.size:
+                is_dead = self.player.take_damage()
+                if is_dead:
+                    self.create_explosion(self.player.pos[0], self.player.pos[1], WHITE, size=2)
+                    self.state = STATE_GAME_OVER
+                    self.game_over_time = current_time
+                    if self.score > self.high_score:
+                        self.high_score = self.score
+                        self.save_high_score()
+                else:
+                    self.add_screen_shake(100)
+                    for _ in range(8):
+                        vel_x = random.uniform(-3, 3)
+                        vel_y = random.uniform(-3, 3)
+                        self.engine_particles.append(Particle(self.player.pos[0], self.player.pos[1], vel_x, vel_y, RED, size=2, lifetime=15))
+
+            # Boss shooting
+            if self.boss.should_shoot():
+                boss_bullets = self.boss.shoot(self.player.pos)
+                self.enemy_bullets.extend(boss_bullets)
+
         # Update asteroids
         self.asteroids = [a for a in self.asteroids if a.update()]
 
@@ -740,6 +914,35 @@ class Game:
                         break
             if b not in self.bullets:
                 continue
+
+            # Bullet vs Boss
+            if self.boss:
+                if math.hypot(b.pos[0] - self.boss.pos[0], b.pos[1] - self.boss.pos[1]) < self.boss.size:
+                    if b in self.bullets:
+                        self.bullets.remove(b)
+                    # Hit spark
+                    for _ in range(8):
+                        vel_x = random.uniform(-2, 2)
+                        vel_y = random.uniform(-2, 2)
+                        self.engine_particles.append(Particle(self.boss.pos[0], self.boss.pos[1], vel_x, vel_y, ORANGE, size=3, lifetime=15))
+
+                    if self.boss.take_damage():
+                        # Boss defeated
+                        self.score += 500
+                        self.boss_defeated_count += 1
+                        # Massive explosion
+                        for i in range(5):
+                            offset_x = random.uniform(-20, 20)
+                            offset_y = random.uniform(-20, 20)
+                            self.create_explosion(self.boss.pos[0] + offset_x, self.boss.pos[1] + offset_y,
+                                                random.choice([PURPLE, ORANGE, RED]), size=3)
+                        # Drop multiple powerups
+                        for _ in range(5):
+                            offset_x = random.uniform(-30, 30)
+                            offset_y = random.uniform(-30, 30)
+                            self.powerups.append(PowerUp(self.boss.pos[0] + offset_x, self.boss.pos[1] + offset_y))
+                        self.boss = None
+                    continue
 
             # Bullet vs Enemy
             for e in self.enemies[:]:
@@ -829,12 +1032,20 @@ class Game:
             for p in self.powerups:
                 p.draw(low_res)
 
+            # Draw boss
+            if self.boss:
+                self.boss.draw(low_res)
+
             # Draw explosions (in front of everything)
             for exp in self.explosions:
                 exp.draw(low_res)
 
             # Draw HUD
             self.draw_hud(low_res)
+
+            # Draw boss health bar
+            if self.boss:
+                self.boss.draw_health_bar(low_res)
 
             if self.state == STATE_PAUSED:
                 pause_text = self.game_font.render("PAUSED", True, YELLOW)
