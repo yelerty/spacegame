@@ -11,7 +11,7 @@ pygame.font.init()
 
 # Constants
 WIDTH, HEIGHT = 320, 240
-SCALE = 2
+SCALE = 2.6  # 30% increase from original 2.0
 FPS = 30
 
 # Colors
