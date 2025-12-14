@@ -10,8 +10,8 @@ pygame.init()
 pygame.font.init()
 
 # Constants
-WIDTH, HEIGHT = 320, 240
-SCALE = 2.6  # 30% increase from original 2.0
+WIDTH, HEIGHT = 416, 312  # Increased internal resolution (30% larger world)
+SCALE = 2  # Back to 2x scaling for crisp pixels
 FPS = 30
 
 # Colors
@@ -46,11 +46,11 @@ BOMB_INVINCIBILITY_DURATION = 2000
 BOMB_FLASH_DURATION = 300
 
 # AI constants
-EMERGENCY_DODGE_RADIUS = 40
-PERCEPTION_RADIUS = 120
+EMERGENCY_DODGE_RADIUS = 50  # Increased for larger world
+PERCEPTION_RADIUS = 150  # Increased for larger world
 
 # Enemy constants
-ENEMY_SPAWN_RATE = 60  # Increased from 50 to slow down spawning
+ENEMY_SPAWN_RATE = 50  # Slightly faster spawn for larger world
 ENEMY_BULLET_SPEED = 3.0
 ENEMY_ROTATION_SPEED = 2.5
 
@@ -576,11 +576,11 @@ class Game:
         self.game_font = pygame.font.Font(None, 40)
         self.info_font = pygame.font.Font(None, 24)
 
-        # Background
+        # Background - scaled for larger world
         self.stars = [[random.randint(0, WIDTH), random.randint(0, HEIGHT),
-                      random.choice([WHITE, GRAY])] for _ in range(100)]
+                      random.choice([WHITE, GRAY])] for _ in range(150)]
         self.dust = [[random.randint(0, WIDTH), random.randint(0, HEIGHT),
-                     random.choice([GRAY, BLUE])] for _ in range(50)]
+                     random.choice([GRAY, BLUE])] for _ in range(75)]
         self.bg_offset = [0.0, 0.0]
 
         # Game state
@@ -676,7 +676,7 @@ class Game:
         for e in self.enemies:
             dist = math.hypot(self.player.pos[0] - e.pos[0], self.player.pos[1] - e.pos[1])
             all_threats.append({'pos': e.pos, 'threat': 6.0 * e.tier, 'dist': dist})
-            if dist < 80:
+            if dist < 100:  # Increased for larger world
                 nearby_enemies += 1
 
         for a in self.asteroids:
@@ -686,7 +686,7 @@ class Game:
         for eb in self.enemy_bullets:
             dist = math.hypot(self.player.pos[0] - eb.pos[0], self.player.pos[1] - eb.pos[1])
             all_threats.append({'pos': eb.pos, 'threat': 25.0, 'dist': dist})
-            if dist < 60:
+            if dist < 80:  # Increased for larger world
                 nearby_bullets += 1
 
         if self.boss:
@@ -784,7 +784,7 @@ class Game:
                 if self.enemies:
                     nearby_enemies_list = [e for e in self.enemies if
                                           math.hypot(self.player.pos[0] - e.pos[0],
-                                                    self.player.pos[1] - e.pos[1]) < 150]
+                                                    self.player.pos[1] - e.pos[1]) < 200]  # Increased for larger world
                     if nearby_enemies_list:
                         nearby_enemies_list.sort(key=lambda e: (e.tier, math.hypot(self.player.pos[0] - e.pos[0],
                                                                                     self.player.pos[1] - e.pos[1])))
@@ -831,7 +831,7 @@ class Game:
             dist_to_target = math.hypot(self.player.pos[0] - target_pos[0],
                                        self.player.pos[1] - target_pos[1])
             # Better distance management for boss
-            optimal_dist = 120 if self.boss else 90
+            optimal_dist = 150 if self.boss else 110  # Increased for larger world
             if dist_to_target > optimal_dist:
                 self.player.thrust = min(MAX_THRUST, self.player.thrust + THRUST_ACCEL)
             elif dist_to_target < optimal_dist - 30:
