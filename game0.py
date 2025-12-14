@@ -511,14 +511,29 @@ class PowerUp:
 
     def __init__(self, x, y, power_type=None):
         self.pos = [x, y]
+        # Random velocity for item movement
+        self.vel = [random.uniform(-0.5, 0.5), random.uniform(0.5, 1.5)]
         if power_type is None:
             self.type = random.choice([self.TYPE_WEAPON, self.TYPE_HEALTH, self.TYPE_SHIELD, self.TYPE_BOMB])
         else:
             self.type = power_type
 
     def update(self):
-        self.pos[1] += 1
-        return self.pos[1] <= HEIGHT
+        # Move with velocity
+        self.pos[0] += self.vel[0]
+        self.pos[1] += self.vel[1]
+
+        # Wrap around screen like player ship
+        if self.pos[0] > WIDTH:
+            self.pos[0] = 0
+        if self.pos[0] < 0:
+            self.pos[0] = WIDTH
+        if self.pos[1] > HEIGHT:
+            self.pos[1] = 0
+        if self.pos[1] < 0:
+            self.pos[1] = HEIGHT
+
+        return True  # Always stay alive (wrap around instead of disappearing)
 
     def draw(self, surface):
         if self.type == self.TYPE_WEAPON:
