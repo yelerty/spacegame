@@ -313,8 +313,15 @@ class EnemyBullet:
         self.pos = [x, y]
         self.vel = [vel_x, vel_y]
         self.tier = tier
+        self.creation_time = pygame.time.get_ticks()
 
     def update(self, target_pos=None):
+        # Check if homing bullet has expired (15 seconds lifetime)
+        if self.tier >= 4:
+            current_time = pygame.time.get_ticks()
+            if current_time - self.creation_time > 15000:  # 15 seconds
+                return False
+
         if self.tier >= 4 and target_pos:
             # Homing bullet
             dx = target_pos[0] - self.pos[0]
